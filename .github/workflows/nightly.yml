@@ -1,0 +1,56 @@
+name: Nightly build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A newer push supersedes an in-flight build instead of racing it.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+jobs:
+  nightly:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependency
+        run: python -m pip install "pyinstaller>=6,<7"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build Windows application
+        run: pyinstaller --noconfirm --clean mugen_char_linter_gui.spec
+
+      - name: Add release documentation
+        shell: pwsh
+        run: Copy-Item -Path LICENSE, README.md -Destination dist/MugenCharLinter -Force
+
+      - name: Create distribution archive
+        shell: pwsh
+        run: Compress-Archive -Path dist/MugenCharLinter -DestinationPath MugenCharLinter-nightly.zip -Force
+
+      - name: Replace rolling nightly release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Recreated (not edited) so the release date matches this build.
+          gh release delete nightly --yes --cleanup-tag 2>$null
+          gh release create nightly MugenCharLinter-nightly.zip `
+            --target $env:GITHUB_SHA --latest --title "Nightly build" `
+            --notes "Built from commit $env:GITHUB_SHA."
