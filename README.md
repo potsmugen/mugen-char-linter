@@ -21,6 +21,8 @@ made for Ikemen GO, since Ikemen-only features may look like mistakes to it.
   uses the first one, so the rest are flagged.
 - **Invalid values** — for a few settings with a fixed list of options (like
   `trans` or `postype`), values M.U.G.E.N doesn't accept.
+- **No-op `persistent`** — in negative states (-1, -2, -3), `persistent`
+  does nothing, so it's flagged.
 - **Mismatched state numbers** — `[State]` lines that don't match the
   `[Statedef]` they belong to.
 - **Command file cleanup** — unknown or duplicate entries in `.cmd` commands,

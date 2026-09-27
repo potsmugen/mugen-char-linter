@@ -841,6 +841,7 @@ def discover_air_file_from_def(def_path: str) -> Optional[str]:
 
 LINTER_TAG_NAMES = (
     'CNS Unknown Parameter', 'CNS Invalid Value', 'CNS Duplicate Parameter',
+    'CNS Negative-State Persistent',
     'CNS Garbage Line', 'CMD Unknown Parameter', 'CMD Duplicate Parameter',
     'AIR Duplicate Action', 'AIR Garbage Line',
 )
@@ -868,7 +869,7 @@ def comment_out(raw: str, tag: Optional[str] = None) -> str:
 
 def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool,
                   do_garbage_lines: bool, removal_mode: str = 'comment',
-                  do_check_values: bool = False
+                  do_check_values: bool = False, do_negative_persistent: bool = False
                   ) -> Tuple[str, List[str], Dict[str, int]]:
     """
     removal_mode: 'delete' (drop flagged lines entirely), 'comment' (turn
@@ -883,6 +884,8 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
     do_check_values: flag/remove keys whose value isn't in the per-type
     enum table for that key (only checked when the key itself is valid
     for the type).
+    do_negative_persistent: flag/remove 'persistent' on controllers in
+    negative states (-1/-2/-3), where it has no effect.
     """
     validate_removal_mode(removal_mode)
     lines = split_lines(content)
@@ -894,6 +897,7 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
         'headers_normalized': 0,
         'garbage_lines_handled': 0,
         'invalid_values_removed': 0,
+        'negative_persistent_removed': 0,
     }
     verb = "commented out" if removal_mode in ('comment', 'tag') else "deleted"
 
@@ -904,6 +908,8 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
     ctrl_type: Optional[str] = None
     is_statedef_block = False
     current_statedef_no: Optional[str] = None
+    enclosing_statedef_no: Optional[int] = None  # tracked regardless of do_headers
+    state_header_no: Optional[int] = None  # fallback for Statedef-less (WinMUGEN) files
 
     def flush_block():
         # --- 1. Pruning: which line indices are invalid params? Statedef blocks
@@ -947,6 +953,18 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
                 if value is not None and value.strip().lower() not in allowed:
                     invalid_value_indices.add(idx)
 
+        # --- 2b. 'persistent' in a negative state is a no-op (maintainer-confirmed).
+        negative_persistent_indices: Set[int] = set()
+        if do_negative_persistent and not is_statedef_block:
+            state_no = (enclosing_statedef_no if enclosing_statedef_no is not None
+                        else state_header_no)
+            if state_no is not None and state_no < 0:
+                for idx, (key, raw, lineno) in enumerate(block_lines):
+                    if (key is not None and key.lower() == 'persistent'
+                            and idx not in invalid_indices
+                            and idx not in invalid_value_indices):
+                        negative_persistent_indices.add(idx)
+
         # --- 3. Dedupe: for each key (excluding triggers), keep only the FIRST
         #        surviving occurrence — later duplicates are dead. On var-family
         #        controllers, v/fv/var()/fvar()/sysvar()/sysfvar() all pick ONE
@@ -963,6 +981,7 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
 
             def skip(idx, key):
                 return (idx in invalid_indices or idx in invalid_value_indices
+                        or idx in negative_persistent_indices
                         or key is None or is_trigger_key(key))
 
             for idx, (key, raw, lineno) in enumerate(block_lines):
@@ -1000,6 +1019,16 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
                 )
                 if removal_mode in ('comment', 'tag'):
                     tag = 'CNS Invalid Value' if removal_mode == 'tag' else None
+                    new_lines.append(comment_out(raw, tag))
+                continue
+            if idx in negative_persistent_indices:
+                stats['negative_persistent_removed'] += 1
+                removed_log.append(
+                    f"Line {lineno}: [CNS Negative-State Persistent] {verb} no-op 'persistent' "
+                    f"(type={sctrl_display}) from {block_header}: {raw.strip()}"
+                )
+                if removal_mode in ('comment', 'tag'):
+                    tag = 'CNS Negative-State Persistent' if removal_mode == 'tag' else None
                     new_lines.append(comment_out(raw, tag))
                 continue
             if idx in duplicate_indices:
@@ -1057,6 +1086,12 @@ def process_file(content: str, do_prune: bool, do_dedupe: bool, do_headers: bool
             block_header = clean_header
             header_line = raw
             is_statedef_block = clean_header.lower().startswith('statedef')
+            if is_statedef_block:
+                num = parse_statedef_number(clean_header)
+                enclosing_statedef_no = int(num) if num is not None else None
+            else:
+                m = re.match(r'state\s+([+-]?\d+)', clean_header, re.IGNORECASE)
+                state_header_no = int(m.group(1)) if m else None
 
             if do_headers:
                 if is_statedef_block:
@@ -1779,7 +1814,8 @@ def run_cns_file(input_file: str, output_file: str, do_prune: bool, do_dedupe: b
                   do_headers: bool, do_garbage_lines: bool, do_prune_cmd: bool,
                   do_dedupe_cmd: bool, removal_mode: str, make_backup: bool,
                   do_diff: bool = False, dry_run: bool = False,
-                  do_check_values: bool = False, do_remove_tagged_lines: bool = False
+                  do_check_values: bool = False, do_remove_tagged_lines: bool = False,
+                  do_negative_persistent: bool = False
                   ) -> Tuple[List[str], Dict[str, int], Optional[str], Optional[str], bool]:
     """
     Runs the CNS/state fixer and the CMD/commands fixer in sequence - they
@@ -1797,7 +1833,7 @@ def run_cns_file(input_file: str, output_file: str, do_prune: bool, do_dedupe: b
         removed_tagged_lines = 0
     step1, log1, stats1 = process_file(
         content, do_prune, do_dedupe, do_headers, do_garbage_lines, removal_mode,
-        do_check_values
+        do_check_values, do_negative_persistent
     )
     new_content, log2, stats2 = process_cmd_file(
         step1, do_prune_cmd, do_dedupe_cmd, removal_mode
@@ -1890,6 +1926,8 @@ def render_batch_summary(*, totals: Dict[str, int], has_cns: bool, has_air: bool
         out.append(f"  {'CNS unknown parameters removed:':<{W}}{totals['pruned']}")
         out.append(f"  {'CNS duplicate parameters removed:':<{W}}{totals['duplicates_removed']}")
         out.append(f"  {'CNS invalid values removed:':<{W}}{totals['invalid_values_removed']}")
+        out.append(f"  {'CNS no-op persistent removed:':<{W}}"
+                   f"{totals.get('negative_persistent_removed', 0)}")
         out.append(f"  {'State headers normalised:':<{W}}{totals['headers_normalized']}")
         out.append(f"  {'CMD unknown parameters removed:':<{W}}{totals['cmd_pruned']}")
         out.append(f"  {'CMD duplicate parameters removed:':<{W}}"
@@ -1932,6 +1970,12 @@ def main():
                          help="Flag/remove keys whose value isn't a recognized enum "
                               "(currently trans/postype/space).")
     parser.add_argument('--no-check-values', dest='check_values', action='store_false')
+    parser.add_argument('--negative-persistent', dest='negative_persistent', action='store_true',
+                         default=None,
+                         help="Flag/remove 'persistent' in negative states (-1/-2/-3), "
+                              "where it has no effect.")
+    parser.add_argument('--no-negative-persistent', dest='negative_persistent',
+                         action='store_false')
     parser.add_argument('--prune-cmd', dest='prune_cmd', action='store_true', default=None)
     parser.add_argument('--no-prune-cmd', dest='prune_cmd', action='store_false')
     parser.add_argument('--dedupe-cmd', dest='dedupe_cmd', action='store_true', default=None)
@@ -1981,6 +2025,7 @@ def main():
     do_headers = args.headers
     do_garbage_lines = args.garbage_lines
     do_check_values = args.check_values
+    do_negative_persistent = args.negative_persistent
     do_prune_cmd = args.prune_cmd
     do_dedupe_cmd = args.dedupe_cmd
     do_dedupe_actions = args.dedupe_actions
@@ -1995,6 +2040,10 @@ def main():
             do_check_values = ask(
                 "[CNS] Also flag/remove recognized keys with an invalid enum value "
                 "(trans/postype/space)?"
+            )
+        if do_negative_persistent is None:
+            do_negative_persistent = ask(
+                "[CNS] Remove 'persistent' from negative states (-1/-2/-3), where it does nothing?"
             )
         if do_dedupe is None:
             do_dedupe = ask(
@@ -2016,7 +2065,7 @@ def main():
                 "duplicates, the format allows multiple motions sharing one name)?"
             )
     else:
-        do_prune = do_dedupe = do_headers = do_check_values = False
+        do_prune = do_dedupe = do_headers = do_check_values = do_negative_persistent = False
         do_prune_cmd = do_dedupe_cmd = False
 
     # Garbage-line handling is global - it runs across CNS+CMD text and,
@@ -2063,6 +2112,7 @@ def main():
 
     if removal_mode is None:
         any_removal_possible = (do_prune or do_dedupe or do_garbage_lines
+                                  or do_check_values or do_negative_persistent
                                   or do_prune_cmd or do_dedupe_cmd
                                   or do_dedupe_actions or do_bake)
         if any_removal_possible and not args.yes:
@@ -2097,7 +2147,7 @@ def main():
         sys.exit(1)
 
     totals = {'pruned': 0, 'duplicates_removed': 0, 'headers_normalized': 0,
-              'invalid_values_removed': 0,
+              'invalid_values_removed': 0, 'negative_persistent_removed': 0,
               'garbage_lines_handled': 0, 'air_garbage_lines_handled': 0,
               'cmd_pruned': 0, 'cmd_duplicates_removed': 0,
               'duplicate_actions_removed': 0, 'empty_actions_baked': 0,
@@ -2124,7 +2174,8 @@ def main():
                     do_garbage_lines, do_prune_cmd, do_dedupe_cmd,
                     removal_mode, args.backup, do_diff=args.diff, dry_run=args.dry_run,
                     do_check_values=do_check_values,
-                    do_remove_tagged_lines=args.remove_tagged_lines
+                    do_remove_tagged_lines=args.remove_tagged_lines,
+                    do_negative_persistent=do_negative_persistent
                 )
         except FileNotFoundError:
             print(f"Error: File '{input_file}' not found.")

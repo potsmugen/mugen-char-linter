@@ -148,7 +148,9 @@ class MugenToolkitGUI(tk.Tk):
         self.do_dedupe = tk.BooleanVar(value=True)
         self.do_headers = tk.BooleanVar(value=True)
         self.do_check_values = tk.BooleanVar(value=True)
-        self._cns_vars = [self.do_prune, self.do_dedupe, self.do_check_values, self.do_headers]
+        self.do_negative_persistent = tk.BooleanVar(value=True)
+        self._cns_vars = [self.do_prune, self.do_dedupe, self.do_check_values,
+                          self.do_negative_persistent, self.do_headers]
 
         # CMD (.cmd's own Command/Remap/Defaults sections) fixers
         self.do_prune_cmd = tk.BooleanVar(value=True)
@@ -245,15 +247,18 @@ class MugenToolkitGUI(tk.Tk):
         cns_frame = ttk.LabelFrame(fixers_row, text="CNS checks")
         cns_frame.pack(side="left", fill="both", expand=True, padx=(0, GAP_S))
         self._build_toggle_row(cns_frame, self._cns_vars)
-        self._check(cns_frame, "Remove unknown parameters", self.do_prune,
+        self._check(cns_frame, "Unknown parameters", self.do_prune,
                     "Parameters that aren't recognized as valid for the type of state "
                     "controller, like typos or parameters from other state controller types.")
-        self._check(cns_frame, "Remove duplicate parameters", self.do_dedupe,
+        self._check(cns_frame, "Duplicate parameters", self.do_dedupe,
                     "When a parameter appears more than once in the same state controller, "
                     "keep only the first one.")
-        self._check(cns_frame, "Remove invalid values", self.do_check_values,
+        self._check(cns_frame, "Invalid values", self.do_check_values,
                     "Values that aren't recognized as valid for parameters with a fixed list "
                     "of options.")
+        self._check(cns_frame, "No-op persistent", self.do_negative_persistent,
+                    "'persistent' does nothing in negative states (-1, -2, -3), so it's "
+                    "removed there.")
         self._check(cns_frame, "Normalize state headers", self.do_headers,
                     "Make each [State] header use the number of the [Statedef] it belongs to, "
                     "and tidy its formatting.")
@@ -261,16 +266,16 @@ class MugenToolkitGUI(tk.Tk):
         cmd_frame = ttk.LabelFrame(fixers_row, text="CMD checks")
         cmd_frame.pack(side="left", fill="both", expand=True, padx=GAP_S)
         self._build_toggle_row(cmd_frame, self._cmd_vars)
-        self._check(cmd_frame, "Remove unknown parameters", self.do_prune_cmd,
+        self._check(cmd_frame, "Unknown parameters", self.do_prune_cmd,
                     "Parameters that aren't recognized as valid for the current block.")
-        self._check(cmd_frame, "Remove duplicate parameters", self.do_dedupe_cmd,
+        self._check(cmd_frame, "Duplicate parameters", self.do_dedupe_cmd,
                     "When a parameter appears more than once in the same block, keep only the "
                     "first one.")
 
         air_frame = ttk.LabelFrame(fixers_row, text="AIR checks")
         air_frame.pack(side="left", fill="both", expand=True, padx=(GAP_S, 0))
         self._build_toggle_row(air_frame, self._air_vars)
-        self._check(air_frame, "Remove duplicate actions", self.do_dedupe_actions,
+        self._check(air_frame, "Duplicate actions", self.do_dedupe_actions,
                     "When the same [Begin Action] number appears more than once, keep only the "
                     "first one.")
         self._check(air_frame, "Resolve empty actions", self.do_bake_fallthrough,
@@ -286,7 +291,7 @@ class MugenToolkitGUI(tk.Tk):
         global_frame = ttk.LabelFrame(options_row, text="Global checks")
         global_frame.pack(side="left", fill="both", padx=(0, GAP_S))
         self._build_toggle_row(global_frame, self._global_vars)
-        self._check(global_frame, "Remove garbage lines", self.do_garbage_lines,
+        self._check(global_frame, "Garbage lines", self.do_garbage_lines,
                     "Lines that aren't recognized as valid code, like leftover notes or "
                     "broken text.")
         self._check(global_frame, "Delete tagged lines",
@@ -574,7 +579,7 @@ class MugenToolkitGUI(tk.Tk):
                           f"{len(cns_files) + len(air_files)} file(s).\n")
 
         totals = {'pruned': 0, 'duplicates_removed': 0, 'headers_normalized': 0,
-                  'invalid_values_removed': 0,
+                  'invalid_values_removed': 0, 'negative_persistent_removed': 0,
                   'garbage_lines_handled': 0, 'air_garbage_lines_handled': 0,
                   'cmd_pruned': 0, 'cmd_duplicates_removed': 0,
                   'duplicate_actions_removed': 0, 'empty_actions_baked': 0,
@@ -601,7 +606,8 @@ class MugenToolkitGUI(tk.Tk):
                         self.do_prune_cmd.get(), self.do_dedupe_cmd.get(),
                         self.removal_mode.get(), self.make_backup.get(),
                         self.do_diff.get(), dry_run, self.do_check_values.get(),
-                        self.do_remove_tagged_lines.get()
+                        self.do_remove_tagged_lines.get(),
+                        self.do_negative_persistent.get()
                     )
             except Exception as e:  # windowed app: never fail silently
                 self._log(f"=== {input_file} ===")

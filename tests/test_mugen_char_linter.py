@@ -70,6 +70,45 @@ class CnsProcessingTests(unittest.TestCase):
         self.assertEqual(stats['pruned'], 1)
         self.assertEqual(len(log), 3)
 
+    def test_negative_state_persistent_is_removed(self):
+        content = (
+            '[Statedef -2]\n'
+            '[State -2, a]\n'
+            'type = VarSet\n'
+            'trigger1 = 1\n'
+            'var(1) = 1\n'
+            'persistent = 0\n'
+            '[Statedef 200]\n'
+            '[State 200, b]\n'
+            'type = VarSet\n'
+            'trigger1 = 1\n'
+            'var(1) = 1\n'
+            'persistent = 0\n'
+        )
+        output, log, stats = linter.process_file(
+            content, True, True, False, False, 'tag', True, True
+        )
+        self.assertIn('; [CNS Negative-State Persistent] persistent = 0', output)
+        self.assertEqual(output.count('persistent = 0'), 2)  # State 200 one kept as-is
+        self.assertEqual(stats['negative_persistent_removed'], 1)
+        self.assertEqual(len(log), 1)
+
+    def test_negative_persistent_uses_state_header_without_statedef(self):
+        content = '[State -1, a]\ntype = Null\ntrigger1 = 1\npersistent = 0\n'
+        output, _, stats = linter.process_file(
+            content, False, False, False, False, 'delete', False, True
+        )
+        self.assertNotIn('persistent', output)
+        self.assertEqual(stats['negative_persistent_removed'], 1)
+
+    def test_negative_persistent_off_keeps_line(self):
+        content = '[Statedef -3]\n[State -3]\ntype = Null\ntrigger1 = 1\npersistent = 0\n'
+        output, _, stats = linter.process_file(
+            content, True, True, True, False, 'comment', True, False
+        )
+        self.assertIn('\npersistent = 0\n', output)
+        self.assertEqual(stats['negative_persistent_removed'], 0)
+
     def test_garbage_can_be_deleted_without_affecting_headers(self):
         content = '[Statedef 0]\nstray\n[State 0]\nvalue = 1\n'
         output, _, stats = linter.process_file(
