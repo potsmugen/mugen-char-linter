@@ -111,7 +111,12 @@ def open_file_location(path: str) -> None:
     system = platform.system()
     try:
         if system == 'Windows':
-            subprocess.Popen(['explorer', '/select,' + path])
+            if os.path.exists(path):
+                # Raw string, not a list: list2cmdline quotes "/select,<path>" as a whole when
+                # the path has spaces, and Explorer then falls back to Documents.
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+            else:
+                os.startfile(os.path.dirname(path))
         elif system == 'Darwin':
             subprocess.Popen(['open', '-R', path])
         else:

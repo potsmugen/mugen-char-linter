@@ -64,6 +64,7 @@ Engines are a no-op on content they don't own (empirically). Re-check that if pa
 - Duplicate AIR action: comment the **header** too, not just the body.
 - Don't log every header normalize. Don't log "DIFFERENT VALUE" on dups. `get_value()` is gone.
 - `removal_mode` has three values now, not two - any new call site doing `if removal_mode == 'comment':` silently drops `'tag'` handling. Check for `in ('comment', 'tag')` instead. Processing APIs validate the mode explicitly; do not replace that with `assert`.
+- Windows "Open file location": call `explorer /select,"<path>"` as a raw command string, never a Popen list (list quoting breaks paths with spaces → Explorer opens Documents).
 
 ## MUGEN param policy
 
